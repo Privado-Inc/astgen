@@ -1,5 +1,6 @@
 # AST generator
 
+
 This script creates Abstract Syntax Tree (AST) of all JS/TS files in JSON format.
 The AST is created by using the bundled babel parser (for JavaScript, TypeScript).
 Type maps are generated using the Typescript compiler / type checker API.
