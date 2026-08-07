@@ -42,6 +42,33 @@ function toVueAst(file: string): babelParser.ParseResult<babelTypes.File> {
     return codeToJsAst(cleanedCode);
 }
 
+function astOutputPath(file: string, options: Options): string {
+    return path.join(options.output, path.relative(options.src, file) + ".json");
+}
+
+/**
+ * Per-file bookkeeping for runs with a file timeout: skips files that
+ * already timed out and records the file about to be processed so the
+ * parent can detect a stuck parse. Returns false when the file should be
+ * skipped.
+ */
+function beginFile(file: string, options: Options, skipFiles: Set<string>): boolean {
+    if (skipFiles.has(file)) {
+        console.warn("Parsing", file, ":", "File skipped, hit the file timeout previously");
+        return false;
+    }
+    if (options.progressFile) {
+        if (fs.existsSync(astOutputPath(file, options))) {
+            return false;
+        }
+        fs.writeFileSync(options.progressFile, file);
+        if (process.env.ASTGEN_TEST_HANG_FILE && file.endsWith(process.env.ASTGEN_TEST_HANG_FILE)) {
+            for (;;) { /* simulated stuck parse, test-only */ }
+        }
+    }
+    return true;
+}
+
 function createTsc(srcFiles: string[]): TscUtils.TscResult | undefined {
     try {
         return TscUtils.tscForFiles(srcFiles)
@@ -64,7 +91,9 @@ async function createJSAst(options: Options) {
             ts = createTsc(srcFiles);
         }
 
+        const skipFiles = new Set(options.skipFiles ?? []);
         for (const file of srcFiles) {
+            if (!beginFile(file, options, skipFiles)) continue;
             try {
                 const ast = fileToJsAst(file);
                 writeAstFile(file, ast, options);
@@ -96,7 +125,9 @@ async function createJSAst(options: Options) {
  */
 async function createVueAst(options: Options) {
     const srcFiles: string[] = await FileUtils.filesWithExtensions(options, [".vue"]);
+    const skipFiles = new Set(options.skipFiles ?? []);
     for (const file of srcFiles) {
+        if (!beginFile(file, options, skipFiles)) continue;
         try {
             const ast = toVueAst(file);
             if (ast) {
@@ -115,7 +146,7 @@ async function createVueAst(options: Options) {
  */
 function writeAstFile(file: string, ast: babelParser.ParseResult<babelTypes.File>, options: Options) {
     const relativePath = path.relative(options.src, file)
-    const outAstFile = path.join(options.output, relativePath + ".json");
+    const outAstFile = astOutputPath(file, options);
     const data = {
         fullName: file,
         relativeName: relativePath,

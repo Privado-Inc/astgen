@@ -2,7 +2,9 @@
 
 import start from "./index"
 import Options from "./Options"
+import {runWithFileTimeout, WorkerConfig} from "./FileTimeout"
 
+import * as fs from "node:fs"
 import * as path from "node:path"
 import yargs from "yargs"
 import {hideBin} from "yargs/helpers"
@@ -54,6 +56,16 @@ async function main(argv: string[]) {
             },
             description: "Exclude files matching this regex (matches the absolute path)."
         })
+        .option("file-timeout", {
+            default: 120,
+            type: "number",
+            description: "Max seconds to spend on a single file before it is skipped. 0 disables the timeout."
+        })
+        .option("worker-config", {
+            type: "string",
+            hidden: true,
+            description: "Internal: path to the supervisor's worker config file."
+        })
         .version()
         .help("h").parseSync();
 
@@ -61,7 +73,17 @@ async function main(argv: string[]) {
         if (args.output === "ast_out") {
             args.output = path.join(args.src, args.output);
         }
-        await start(args);
+        const workerConfigFile = (args as { "worker-config"?: string })["worker-config"];
+        if (workerConfigFile) {
+            const config: WorkerConfig = JSON.parse(fs.readFileSync(workerConfigFile, "utf-8"));
+            args.skipFiles = config.skipFiles;
+            args.progressFile = config.progressFile;
+            await start(args);
+        } else if ((args["file-timeout"] ?? 0) > 0) {
+            process.exit(await runWithFileTimeout(hideBin(argv), args));
+        } else {
+            await start(args);
+        }
     } catch (e) {
         console.error(e);
         process.exit(1);
