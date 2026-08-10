@@ -5,5 +5,8 @@ export default interface Options {
     recurse: boolean,
     tsTypes: boolean,
     "exclude-file": string[],
-    "exclude-regex"?: RegExp
+    "exclude-regex"?: RegExp,
+    "file-timeout"?: number,
+    skipFiles?: string[],
+    progressFile?: string
 }
