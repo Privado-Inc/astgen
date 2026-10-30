@@ -1,7 +1,11 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
-import start from "./index"
+import start from "./Pipeline"
 import Options from "./Options"
+import * as Defaults from "./Defaults"
+import * as Logger from "./Logger"
+import {getErrorMessage} from "./Errors"
+import {VERSION} from "./version"
 import {runWithFileTimeout, WorkerConfig} from "./FileTimeout"
 
 import * as fs from "node:fs"
@@ -10,7 +14,7 @@ import yargs from "yargs"
 import {hideBin} from "yargs/helpers"
 
 async function main(argv: string[]) {
-    const args: Options = yargs(hideBin(argv))
+    const parsed = yargs(hideBin(argv))
         .option("src", {
             alias: "i",
             default: ".",
@@ -21,8 +25,9 @@ async function main(argv: string[]) {
         })
         .option("output", {
             alias: "o",
-            default: "ast_out",
-            description: "Output directory for generated AST json files",
+            type: "string",
+            description:
+                `Output directory for generated AST json files (default: <src>/${Defaults.DEFAULT_OUTPUT_DIR})`,
         })
         .option("type", {
             alias: "t",
@@ -51,7 +56,8 @@ async function main(argv: string[]) {
                 try {
                     return new RegExp(arg.toString(), "i")
                 } catch (err) {
-                    return undefined;
+                    Logger.warn(`--exclude-regex: ignoring invalid regex ${JSON.stringify(arg)}: ${getErrorMessage(err)}`)
+                    return undefined
                 }
             },
             description: "Exclude files matching this regex (matches the absolute path)."
@@ -66,27 +72,33 @@ async function main(argv: string[]) {
             hidden: true,
             description: "Internal: path to the supervisor's worker config file."
         })
-        .version()
-        .help("h").parseSync();
+        .version(VERSION)
+        .help("h").parseSync()
+
+    const args: Options = {
+        src: parsed.src,
+        output: parsed.output ?? path.join(parsed.src, Defaults.DEFAULT_OUTPUT_DIR),
+        type: parsed.type,
+        recurse: parsed.recurse,
+        tsTypes: parsed.tsTypes,
+        "exclude-file": parsed["exclude-file"],
+        "exclude-regex": parsed["exclude-regex"],
+        "file-timeout": parsed["file-timeout"],
+    }
 
     try {
-        if (args.output === "ast_out") {
-            args.output = path.join(args.src, args.output);
-        }
-        const workerConfigFile = (args as { "worker-config"?: string })["worker-config"];
+        const workerConfigFile = parsed["worker-config"]
         if (workerConfigFile) {
-            const config: WorkerConfig = JSON.parse(fs.readFileSync(workerConfigFile, "utf-8"));
-            args.skipFiles = config.skipFiles;
-            args.progressFile = config.progressFile;
-            await start(args);
-        } else if ((args["file-timeout"] ?? 0) > 0) {
-            process.exit(await runWithFileTimeout(hideBin(argv), args));
+            const config: WorkerConfig = JSON.parse(fs.readFileSync(workerConfigFile, "utf-8"))
+            await start({...args, skipFiles: config.skipFiles, progressDir: config.progressDir})
+        } else if (args["file-timeout"]! > 0) {
+            process.exit(await runWithFileTimeout(hideBin(argv), args))
         } else {
-            await start(args);
+            await start(args)
         }
     } catch (e) {
-        console.error(e);
-        process.exit(1);
+        Logger.error(e)
+        process.exit(1)
     }
 }
 

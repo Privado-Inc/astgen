@@ -1,0 +1,76 @@
+// Worker entrypoint loaded by [WorkerPool.ts](./WorkerPool.ts).
+//
+// The worker performs a full per-file AST pipeline step:
+//   1. Read the file as a Buffer.
+//   2. Validate (EMSCRIPTEN marker, line length, LOC) without UTF-8 decoding
+//      the rejection path.
+//   3. Parse the surviving content — Vue files first run through the Vue
+//      cleaner regex pipeline, JS/TS files go straight to Babel.
+//   4. Stream the AST JSON straight to disk via JsonUtils.
+//
+// Doing all of this inside the worker means the multi-MB ParseResult tree is
+// never serialized across the thread boundary — only the per-file Done/Error
+// envelope is.
+
+import * as fs from "node:fs"
+import {threadId} from "node:worker_threads"
+
+import * as Parsing from "./Parsing"
+import * as JsonUtils from "./JsonUtils"
+import {validateBuffer} from "./FileUtils"
+import {buildAstFile} from "./Writers"
+import {getErrorMessage} from "./Errors"
+import {reportProgress} from "./FileTimeout"
+
+export const PARSER_JS = "js"
+export const PARSER_VUE = "vue"
+export type ParserKind = typeof PARSER_JS | typeof PARSER_VUE
+
+// `relativePath` and `outputPath` are computed by the dispatcher (see
+// [Pipeline.ts](./Pipeline.ts)) and passed in so the same `path.relative` work
+// isn't repeated inside the worker. The dispatcher is also responsible for
+// ensureDir before submitting, so the output directory already exists here.
+export type Job = {
+    file: string
+    relativePath: string
+    outputPath: string
+    parser: ParserKind
+    progressDir?: string
+}
+
+export type Done = { kind: "done"; file: string; skipped?: string }
+export type Failure = { kind: "error"; file: string; message: string }
+export type WorkerMsg = Done | Failure
+
+function processOne(job: Job): WorkerMsg {
+    try {
+        reportProgress(job.progressDir, String(threadId), job.file)
+        const buf = fs.readFileSync(job.file)
+        const validation = validateBuffer(buf)
+        if (!validation.ok) {
+            return {kind: "done", file: job.file, skipped: validation.reason}
+        }
+        const ast = job.parser === PARSER_VUE
+            ? Parsing.toVueAst(validation.content)
+            : Parsing.codeToJsAst(validation.content)
+        JsonUtils.writeJsonStreamCircular(job.outputPath, buildAstFile(job.file, job.relativePath, ast))
+        return {kind: "done", file: job.file}
+    } catch (err) {
+        return {kind: "error", file: job.file, message: getErrorMessage(err)}
+    } finally {
+        reportProgress(job.progressDir, String(threadId), "")
+    }
+}
+
+declare var self: Worker
+
+// This module is also loaded on the main thread: Pipeline.ts value-imports the
+// PARSER_* constants from here. Registering a global "message" listener there
+// would keep the main event loop alive forever, so guard on the worker context.
+// The pool terminates workers once all jobs are drained, so no shutdown
+// message handling is needed here.
+if (!Bun.isMainThread) {
+    self.onmessage = (ev: MessageEvent<Job>) => {
+        self.postMessage(processOne(ev.data))
+    }
+}

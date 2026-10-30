@@ -1,0 +1,41 @@
+# astgen-regression configuration
+project:
+  name: "javascript-astgen"
+  language: "javascript"
+
+build:
+  install_command: "bun install"
+  build_command: ""
+  dist_dir: "src"
+
+execute:
+  command: "bun {dist_dir}/astgen.ts -i {input_dir} -o {output_dir} -t ts"
+  timeout: 600  # seconds
+
+artifacts:
+  - name: "AST"
+    pattern: "*.json"
+    description: "Abstract Syntax Tree files"
+  - name: "typemap"
+    pattern: "*.typemap"
+    description: "TypeScript type mapping files"
+
+corpora:
+  - name: "typeorm"
+    label: "typeorm/typeorm@0.3.21"
+    clone_url: "https://github.com/typeorm/typeorm.git"
+    tag: "0.3.21"
+    input_subdir: "src"
+  - name: "fastify"
+    label: "fastify/fastify@v5.3.3"
+    clone_url: "https://github.com/fastify/fastify.git"
+    tag: "v5.3.3"
+    input_subdir: ""
+
+github:
+  base_branch: "main"
+  python_version: "3.12"
+  setup_action:
+    uses: "oven-sh/setup-bun@v2"
+    with:
+      bun-version: "latest"
